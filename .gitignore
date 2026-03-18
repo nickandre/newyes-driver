@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 *.pcapng
+*_print.bin
+*_send.py

@@ -105,41 +105,28 @@ App → Printer: !CSC
 sock.close()
 ```
 
-## The Nozzle Map Problem
+## Nozzle Encoding — SOLVED
 
-The printer firmware does NOT accept raw bitmap data. The image must be transformed
-through the SDK's nozzle map before sending. This is done by:
+The printer expects nozzle-mapped data, not raw bitmaps. The encoding is fully reverse-engineered:
 
-1. **IMP_Pre**: Dither/threshold to 1-bit, apply image adjustments
-2. **GetNextPassData**: Split image into strips of `actualHigh` rows
-3. **g02SDK_GetSendData_K** or **p803SDK_GetSendData_K**: Reorder bytes within each strip according to the nozzle map
-4. **Protocol_SendPrintData**: Wrap in `!SPD` packet
+1. **Column-major layout**: for each column, 14 rows × 3 bytes (M, C, Y)
+2. **Per-channel row permutation**: rows are reordered by lookup tables extracted from `libprintsdk.so`
+3. **Per-channel column offsets**: C at +12, Y at -13 relative to M (compensating physical nozzle bank positions)
 
-Without this transformation, the firmware silently ignores the data.
-
-### Nozzle Map Parameters (estimated)
-- `actualHigh`: ~150 (300 DPI × 0.5" head = 150 nozzles)
-- `ByteGroup`: ~14 (0x0E, frequent constant in code)
-- `passType`: 0 (One — single pass for simplest mode)
-
-### Data Layout Within !SPD Packet
+### SPD Packet Data Layout
 ```
-!SPD <direction> <dataSize> <sendWidth> <x> <y> <nozzle_data> \x00\x00 \x0d
+!SPD <height> <Y> <width> 14 <header_byte> <nozzle_data> \x00\x00 \x0d
 ```
 
-The `nozzle_data` is NOT row-sequential bitmap. It's been reorganized by the nozzle map
-to match the physical arrangement of nozzles on the print head cartridge.
+- `height`: pass height parameter (varies by print context)
+- `Y`: vertical page position
+- `width`: horizontal pixel columns
+- `14`: always 14 (bytegroup)
+- `nozzle_data`: 1 header byte + width × 14 × 3 bytes, column-major with row permutation applied
 
-## What's Missing to Print
+See [NOZZLE_PATTERN.md](NOZZLE_PATTERN.md) for the complete encoding specification and `tools/encoder.py` for the implementation.
 
-1. **Nozzle map implementation** — the core transformation from raw bitmap to nozzle-ordered data
-2. **Correct parameters** — actualHigh, ByteGroup, extendedHigh for the LD0806/p803 model
-3. **Possibly a checksum** — the `\x00\x00` we send might need to be a real CRC
-4. **Possibly an init sequence** — GCT + DPC might be required before printing
+## Remaining Work
 
-## Recommended Next Steps
-
-1. **Capture real traffic** from the Android app (easiest: WiFi proxy like mitmproxy, or USB serial tap)
-2. **Try to trigger motor movement** with DPC/DMC commands (physical confirmation the printer is listening)
-3. **Reimplement the p803SDK nozzle map** from ARM64 disassembly
-4. **Try Docker** with the x86_64 `libprintsdk.so` loaded via ctypes as a shortcut
+1. **WiFi printing** — USB works, WiFi write commands are silently ignored (see TRACE_ANALYSIS.md)
+2. **End-to-end validation** — print encoded text on hardware to confirm visual correctness

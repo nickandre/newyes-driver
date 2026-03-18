@@ -14,7 +14,7 @@ Reverse-engineered driver and protocol documentation for the **Newyes LD0806** p
 | WiFi IP | `192.168.4.1` |
 | WiFi Port | `9100` (TCP) |
 | Print Resolution | 300 DPI (600 DPI mode in SDK) |
-| Cartridge | Black (K) or Color (YMC) |
+| Cartridge | Color (YMC) — no black cartridge, K = C+M+Y combined |
 
 ## Status
 
@@ -23,6 +23,8 @@ Reverse-engineered driver and protocol documentation for the **Newyes LD0806** p
 - Paper feed (in/out)
 - Motor control (feeder, carriage, print motor)
 - Full print job replay from captured packets
+- **Nozzle encoding fully reverse-engineered** — image-to-nozzle encoder with per-channel row permutation tables extracted from SDK
+- **Full color image printing** — RGB→CMY conversion with Floyd-Steinberg dithering, verified with photo prints
 
 ### Partially Working (WiFi TCP)
 - Query commands only (GPS, GFV, GDS, GDE, GPD, GFC)
@@ -131,19 +133,34 @@ python wifi_query.py discover    # Scan for printer
 
 **Note**: Only query commands work over WiFi. Printing over WiFi is not yet functional.
 
+### `tools/encoder.py`
+Pure Python image-to-nozzle encoder. Implements the full encoding pipeline: pixel bitmap → column-major nozzle data with per-channel row permutation and column offsets. See [docs/NOZZLE_PATTERN.md](docs/NOZZLE_PATTERN.md).
+
+### `tools/print_image.py`
+Full color image printer. Loads a JPEG/PNG, scales to paper width (2146px), converts RGB→CMY, applies Floyd-Steinberg dithering, encodes multi-pass nozzle data, and generates a binary packet file + Windows sender script. Requires Pillow (`pip install Pillow`).
+
+```bash
+source .venv/bin/activate
+python tools/print_image.py image.jpg
+# Then scp the .bin and _send.py to Windows and run
+```
+
 ### `tools/captured_packets.py`
 The 20 USB packets from a successful Windows print job, extracted from the Wireshark capture. Used by the other tools for print replay.
 
 ## Docs
 
+- [docs/NOZZLE_PATTERN.md](docs/NOZZLE_PATTERN.md) — Nozzle encoding specification (row permutation tables, data layout, channel offsets)
 - [docs/PROTOCOL_FLOW.md](docs/PROTOCOL_FLOW.md) — Wire protocol specification
+- [docs/WINDOWS_EXECUTION.md](docs/WINDOWS_EXECUTION.md) — How to run scripts on the Windows test machine via SSH
 - [docs/TRACE_ANALYSIS.md](docs/TRACE_ANALYSIS.md) — USB capture analysis and WiFi investigation
 - [docs/USB_BUG_REPORT.md](docs/USB_BUG_REPORT.md) — Firmware USB Printer Class non-compliance
+- [docs/FIRMWARE.md](docs/FIRMWARE.md) — Firmware version and OTA mechanism
 
 ## Reverse Engineering Sources
 
 - **Windows driver**: `sPrinter V1.12` (NSIS installer containing `PrinterTool.exe` with embedded `PrintSDKDll.dll`)
-- **Android app**: `iSmart Printer` (Flutter APK with native `libprintsdk.so`)
+- **Android app**: `iSmart Printer` (Flutter APK with native `libprintsdk.so` — row permutation tables extracted from x86_64 build)
 - **Decompiled Java**: `com.example.printsdk` and `com.example.ytprint_plugin` via jadx
 - **Dart AOT**: Decompiled via [blutter](https://github.com/worawit/blutter) — revealed `SocketManager` WiFi flow
 - **USB capture**: Wireshark + USBPcap on Windows
