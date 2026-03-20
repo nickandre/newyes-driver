@@ -6,13 +6,14 @@ Reverse-engineered driver for the Newyes LD0806 portable inkjet printer.
 
 This is a hardware reverse-engineering project. The printer has no public documentation — everything here was figured out from USB captures, APK disassembly, and physical print tests.
 
-**Current state**: The nozzle encoding is fully solved. The encoder can produce correct nozzle data from bitmap images. USB printing works via a Windows machine accessed over SSH. WiFi printing does not work (firmware silently ignores write commands over WiFi).
+**Current state**: Nozzle encoding fully solved. USB printing works via Windows. **WiFi printing works** (solved 2026-03-20). Key discovery: the printer uses **two TCP ports** — 9100 for queries, 9200 for writes. The protocol bytes are identical to USB on both ports.
 
 ## Architecture
 
-- **No dependencies** beyond Python stdlib. No pip packages needed.
-- **Windows-only for printing** — the printer's USB Printer Class implementation is non-compliant, only works with Windows `CreateFileW`. macOS USB is broken.
-- **Remote execution model** — development happens on macOS, scripts are copied to a Windows machine (`nandre-x1c`, 10.0.0.96) via `sshpass`/`scp` and run over SSH. See `docs/WINDOWS_EXECUTION.md`.
+- **No dependencies** beyond Python stdlib. No pip packages needed (Pillow optional for image printing).
+- **WiFi printing** — `tools/printer.py` is the unified interface. Printer WiFi AP at `192.168.4.1`, port 9100 (queries) and 9200 (writes).
+- **USB printing (Windows-only)** — the printer's USB Printer Class is non-compliant, only works with Windows `CreateFileW`. Scripts sent to Windows must be self-contained.
+- **Remote execution model** — development happens on macOS, Windows scripts are copied to `nandre-x1c` (10.0.0.96) via `sshpass`/`scp`. See `docs/WINDOWS_EXECUTION.md`.
 
 ## Key Technical Details
 
@@ -52,11 +53,12 @@ Scripts sent to Windows must be **self-contained** (no imports from other projec
 ## Files
 
 ### Tools (tools/)
+- `printer.py` — **Unified printer interface** (WiFi TCP). Status, sleep config, clean, paper feed, print. Transport-agnostic design.
 - `encoder.py` — Image-to-nozzle encoder with row permutation. This is the core encoding implementation.
-- `print_image.py` — Full color image printing (RGB→CMY, dither, multi-pass). Runs on macOS, generates packet binary for Windows sender.
+- `print_image.py` — Full color image printing (RGB→CMY, dither, multi-pass). Generates packet binary for Windows sender.
 - `print_test.py` — Hardware verification test script (Hello World + colored diagonals).
-- `windows_usb_demo.py` — Windows USB printer driver (status, paper feed, motor control, print replay)
-- `wifi_query.py` — WiFi TCP query tool (queries only, printing doesn't work over WiFi)
+- `windows_usb_demo.py` — Windows USB printer driver (status, paper feed, motor control, print replay). Self-contained.
+- `wifi_query.py` — Legacy WiFi query tool (superseded by printer.py)
 - `captured_packets.py` — Captured USB print job packets for replay
 
 ### Tests (tests/)
@@ -71,10 +73,23 @@ Scripts sent to Windows must be **self-contained** (no imports from other projec
 - `TRACE_ANALYSIS.md` — USB capture analysis and WiFi failure investigation
 - `USB_BUG_REPORT.md` — Firmware USB Printer Class compliance issues
 - `FIRMWARE.md` — Firmware version and OTA update mechanism
+- `ios_wifi_print.pcapng` — iOS app WiFi print capture (complete print job with ACKs)
+- `ios_wifi_commands.pcapng` — iOS app WiFi commands capture (sleep config change, cartridge clean)
 - `*.pcapng` — USB/WiFi packet captures (1dot, 2dots, hello-world at various scales, pdf-printout)
 
-## Printing an Image
+## Printing
 
+### WiFi (macOS — recommended)
+```bash
+# Connect to printer WiFi network first, then:
+python tools/printer.py status                # Query printer status
+python tools/printer.py print image.jpg       # Print an image
+python tools/printer.py sleep 30              # Set sleep timeout
+python tools/printer.py clean                 # Clean print head
+python tools/printer.py paper                 # Paper feed in/out cycle
+```
+
+### USB (Windows)
 ```bash
 # 1. Process image on macOS (generates .bin packet file + Windows sender)
 source .venv/bin/activate
@@ -89,7 +104,8 @@ sshpass -p 'test1234' ssh -o StrictHostKeyChecking=no Admin@10.0.0.96 \
 ## Testing
 
 ```bash
-python tests/test_sdk_encoding.py    # Verify permutation tables against captures
-python tests/decode_nozzle.py        # Decode 1dot.pcapng with known tables
-python tests/decode_nozzle.py --all  # Try all 6 table permutations
+python tools/wifi_test.py                    # WiFi print test (Hello World)
+python tests/test_sdk_encoding.py            # Verify permutation tables against captures
+python tests/decode_nozzle.py                # Decode 1dot.pcapng with known tables
+python tests/decode_nozzle.py --all          # Try all 6 table permutations
 ```

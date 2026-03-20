@@ -105,22 +105,20 @@ We're skipping all of this. The printer may require a specific handshake over Wi
 
 The `DM_printImage` function calls `sendAndReceive()` for every packet and checks `isCommRes()` after each. Over USB, ACKs come back. Over WiFi, they don't. The SDK might detect WiFi mode and skip the ACK check, or the app might handle the ACK differently.
 
-## Critical Next Step: Capture Android WiFi Traffic
+## Resolution: Dual-Port Discovery (2026-03-20)
 
-The **only way to resolve this** is to capture what the actual Android app sends over WiFi TCP. The USB trace tells us the data format, but the WiFi transport behavior may be fundamentally different.
+The WiFi printing failure was caused by sending write commands to the wrong port.
 
-Options:
-1. **PCAPdroid** on Android phone (no root) — capture WiFi traffic to printer
-2. **TCP proxy** on Mac — relay and log all traffic between phone and printer
-3. **Android emulator + proxy** — more complex but no phone needed
+**Root cause**: The printer runs **two TCP servers**:
+- **Port 9100** — read-only queries (GPD, GDS, GFV, GDE, GPS, GFC)
+- **Port 9200** — write/action commands (SDC, SFC, DPC, SPD, DSP)
 
-## What the USB Trace Taught Us
+Write commands sent to port 9100 are silently accepted but never ACKed and never executed. This matches all observed symptoms (queries work, writes silently fail, no ACK, no physical action).
 
-Even though WiFi printing doesn't work yet, the USB trace gave us:
-1. **Exact command sequence**: GDS → SDC → DPC → SPD×17 → DPC
-2. **Correct SDC params**: `1 0 0 1` (cartridgeType=1/YMC, direction=0, paper=0, density=1)
-3. **SPD format**: `!SPD <height> <Y> <width> <ByteGroup>` + nozzle data
-4. **ByteGroup = 14** (confirmed)
-5. **Pass stride = 98**, **17 passes** for the captured image
-6. **Data is nozzle-mapped** — 14 rows × 1073 columns × 3 bytes per value
-7. **The printer ACKs over USB** — WiFi's lack of ACKs is anomalous
+**How it was found**: iOS app traffic captured via Xcode's `rvictl` (Remote Virtual Interface). Parsing the pcapng IP headers revealed the iOS app connects to port 9200 for all write operations. The protocol bytes are identical to USB on both ports.
+
+**All previous theories were wrong**:
+- Not a different header (`\x1b\x30\x30` vs `\x1b\x30\x31`) — same header on both ports
+- Not a missing handshake — no special init required
+- Not a WiFi firmware limitation — same firmware handles both ports
+- Not a connection limit or buffer issue — just the wrong port
